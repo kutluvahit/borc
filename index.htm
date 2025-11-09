@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Borç Hatırlatma - WhatsApp Gönderici (3 Kademeli + Filtler + Çoklu Gönderim + Ödendi)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, sans-serif; }
+    body {
+      margin: 0;
+      background: #f3f4f6;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .container {
+      margin: 24px;
+      max-width: 1000px;
+      width: 100%;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+      padding: 24px;
+    }
+    h1 { text-align: center; margin-top: 0; }
+    h2 { margin-top: 24px; font-size: 16px; color:#111827; }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    input[type="file"], input[type="text"] {
+      font-size: 13px;
+      padding: 6px 8px;
+      border:1px solid #d1d5db;
+      border-radius:6px;
+    }
+    input[type="text"] { flex:1; }
+    .btn {
+      background:#22c55e;
+      color:white;
+      border:none;
+      padding:6px 10px;
+      border-radius:8px;
+      cursor:pointer;
+      font-size:13px;
+    }
+    .btn:hover { background:#16a34a; }
+    .btn.red { background:#ef4444; }
+    .btn.red:hover { background:#dc2626; }
+    .btn.small {
+      font-size:11px;
+      padding:3px 6px;
+      margin-left:4px;
+      background:#3b82f6;
+    }
+    .btn.small:hover { background:#2563eb; }
+    .btn.small.gray {
+      background:#6b7280;
+    }
+    .btn.small.gray:hover {
+      background:#4b5563;
+    }
+    table {
+      width:100%;
+      border-collapse:collapse;
+      font-size:13px;
+      margin-top:10px;
+    }
+    th, td {
+      border-bottom:1px solid #ddd;
+      padding:8px;
+      text-align:left;
+      vertical-align:middle;
+    }
+    th { background:#f9fafb; }
+    th.sortable { cursor:pointer; }
+    th.sortable:hover { background:#e5e7eb; }
+    .tag {
+      background:#ecfdf3;
+      color:#166534;
+      padding:2px 8px;
+      border-radius:999px;
+      font-size:11px;
+    }
+    .empty { color:#9ca3af; text-align:center; padding:16px 0; }
+    .note-text {
+      display:block;
+      font-size:11px;
+      color:#6b7280;
+      margin-top:2px;
+    }
+    .summary {
+      display:flex;
+      justify-content:flex-end;
+      margin-top:4px;
+      font-size:13px;
+      color:#111827;
+    }
+    .summary strong { margin-left:4px; }
+
+    .filterbar {
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      align-items:center;
+      margin-top:4px;
+      margin-bottom:8px;
+      font-size:12px;
+      color:#4b5563;
+    }
+    .filter-btn {
+      background:#e5e7eb;
+      border:none;
+      padding:4px 10px;
+      border-radius:999px;
+      cursor:pointer;
+      font-size:12px;
+    }
+    .filter-btn.active {
+      background:#2563eb;
+      color:#fff;
+    }
+
+    /* 🔴 Ödeme sözü geçmiş satır */
+    tr.overdue-promise td {
+      background:#fee2e2;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Borç Hatırlatma Mesajları</h1>
+
+    <div class="topbar">
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+      <button class="btn" id="loadBtn">Yükle</button>
+      <button class="btn red" id="clearBtn">Listeyi Sıfırla</button>
+      <input type="text" id="searchInput" placeholder="Cari ara... (isim, iç not veya telefon)">
+      <button class="btn" id="bulkStartBtn">Çoklu Gönderim</button>
+      <button class="btn small gray" id="bulkNextBtn" disabled>Sonrakine Geç</button>
+    </div>
+
+    <!-- Gecikme filtresi -->
+    <div class="filterbar">
+      <span>Gecikme filtresi:</span>
+      <button class="filter-btn active" data-filter="all">Tümü</button>
+      <button class="filter-btn" data-filter="30+">30+ gün</button>
+      <button class="filter-btn" data-filter="60+">60+ gün</button>
+    </div>
+
+    <!-- Toplam Borç Özeti -->
+    <div class="summary">
+      Listede görünen toplam borç:
+      <strong id="totalAmount">0,00 ₺</strong>
+    </div>
+
+    <!-- Ana Müşteri Tablosu -->
+    <table id="table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Ad Soyad (Mesajda gidecek) / İç Not (sadece sana)</th>
+          <th>Telefon</th>
+          <th class="sortable" id="sortAmount">Borç (TL) ⬍</th>
+          <th class="sortable" id="sortDate">Son Tarih ⬍</th>
+          <th>Ödeme Sözü</th>
+          <th>İşlem</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="7" class="empty">Henüz veri yok.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Gönderim Geçmişi -->
+    <h2>Gönderim Geçmişi</h2>
+    <table id="logTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Tarih / Saat</th>
+          <th>Ad Soyad (Mesaj)</th>
+          <th>İç Not</th>
+          <th>Telefon</th>
+          <th>Borç (TL)</th>
+          <th>Son Tarih</th>
+          <th>Ödeme Sözü</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="8" class="empty">Henüz gönderim yapılmadı.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const fileInput   = document.getElementById("fileInput");
+    const loadBtn     = document.getElementById("loadBtn");
+    const clearBtn    = document.getElementById("clearBtn");
+    const tbody       = document.querySelector("#table tbody");
+    const sortDateBtn = document.getElementById("sortDate");
+    const sortAmountBtn = document.getElementById("sortAmount");
+    const searchInput = document.getElementById("searchInput");
+    const logTbody    = document.querySelector("#logTable tbody");
+    const totalAmountSpan = document.getElementById("totalAmount");
+    const filterButtons = document.querySelectorAll(".filter-btn");
+    const bulkStartBtn = document.getElementById("bulkStartBtn");
+    const bulkNextBtn  = document.getElementById("bulkNextBtn");
+
+    // 🔧 Firma adı ve IBAN
+    const COMPANY_NAME = "Miray Yapı Hırdavat";
+    const IBAN = "TR00 0000 0000 0000 0000 0000 00"; // BURAYA KENDİ IBAN'INIZI YAZIN
+    const IBAN_OWNER = "Vahit Kutlu"; // IBAN hesabı sahibi
+
+    let customers = [];   // { name, note, phone, amount, due, promise }
+    let filtered  = [];
+    let sortDateAsc   = true;
+    let sortAmountAsc = true;
+    let sendLog   = [];
+    let currentSearch = "";
+    let currentFilter = "all"; // all | 30+ | 60+
+
+    // Çoklu gönderim durumu
+    let bulkMode = false;
+    let bulkUseFiltered = false;
+    let bulkIndex = 0;
+    let bulkTotal = 0;
+
+    // 🔤 Arama için normalize (türkçe karakter duyarsız)
+    function normalizeSearchText(text){
+      if(!text) return "";
+      return text
+        .toString()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g,"")
+        .replace(/ı/g,"i")
+        .replace(/ş/g,"s")
+        .replace(/ğ/g,"g")
+        .replace(/ö/g,"o")
+        .replace(/ç/g,"c")
+        .replace(/ü/g,"u");
+    }
+
+    // 📞 Telefonu normalize et
+    function normalizePhone(v){
+      if(!v) return "";
+      let d = v.toString().replace(/\D/g,"");
+      if(d.startsWith("00")) d = d.slice(2);
+      if(d.startsWith("90") && d.length===12) return d;
+      if(d.startsWith("0") && d.length===11)  return "90"+d.slice(1);
+      if(d.length===10)                        return "90"+d;
+      return d;
+    }
+    function formatPhoneForDisplay(p){
+      if(p && p.startsWith("90") && p.length===12) return "0"+p.slice(2);
+      return p || "";
+    }
+
+    // 🔢 Tutar
+    function parseAmount(v){
+      if(v==null || v==="") return NaN;
+      if(typeof v==="number") return v;
+      let s = v.toString().trim()
+        .replace(/TL|₺/gi,"")
+        .replace(/\s+/g,"");
+      if(s.includes(".") && s.includes(",")){
+        const lastComma = s.lastIndexOf(",");
+        const int  = s.slice(0,lastComma).replace(/\D/g,"");
+        const frac = s.slice(lastComma+1).replace(/\D/g,"");
+        return Number(int+"."+frac);
+      }
+      if(s.includes(",")){
+        s = s.replace(/\./g,"").replace(",",".");
+        return Number(s);
+      }
+      return Number(s);
+    }
+    function formatAmount(a){
+      return a.toLocaleString("tr-TR",{
+        minimumFractionDigits:2,
+        maximumFractionDigits:2
+      });
+    }
+
+    // 📆 Tarih fonksiyonları
+    function excelSerialToISO(serial){
+      const base=new Date(Date.UTC(1899,11,30));
+      const date=new Date(base.getTime()+serial*86400000);
+      const y=date.getUTCFullYear(),
+            m=String(date.getUTCMonth()+1).padStart(2,"0"),
+            d=String(date.getUTCDate()).padStart(2,"0");
+      return `${y}-${m}-${d}`;
+    }
+    function normalizeDateValue(v){
+      if(v==null||v==="")return"";
+      if(typeof v==="number")return excelSerialToISO(v);
+      let s=v.toString().trim();
+      if(/^\d+$/.test(s)&&Number(s)>30000)return excelSerialToISO(Number(s));
+      if(s.includes(".")){
+        const[p1,p2,p3]=s.split(".");
+        return`${p3.length==2?"20"+p3:p3}-${p2.padStart(2,"0")}-${p1.padStart(2,"0")}`;
+      }
+      if(s.includes("-"))return s;
+      return"";
+    }
+    function formatDateForDisplay(iso){
+      if(!iso) return "";
+      const[y,m,d]=iso.split("-");
+      return `${d}.${m}.${y}`;
+    }
+
+    // ⏱️ Gün farkı & bugünden +5 gün
+    function getDaysLate(isoDue){
+      const due   = new Date(isoDue+"T00:00:00");
+      const today = new Date();
+      const diff  = Math.floor((today-due)/(1000*60*60*24));
+      return diff<0 ? 0 : diff;
+    }
+    function getFiveDaysFromToday(){
+      const d=new Date();
+      d.setDate(d.getDate()+5);
+      const y=d.getFullYear(),
+            m=String(d.getMonth()+1).padStart(2,"0"),
+            da=String(d.getDate()).padStart(2,"0");
+      return `${da}.${m}.${y}`;
+    }
+
+    // 💾 Liste Kaydet / Yükle
+    function saveListToLocal(){
+      localStorage.setItem("borcListesi", JSON.stringify(customers));
+    }
+    function loadListFromLocal(){
+      const saved = localStorage.getItem("borcListesi");
+      if(saved){
+        try{
+          customers = JSON.parse(saved) || [];
+          customers = customers.map(c => ({
+            ...c,
+            note: c.note ?? c.name,
+            promise: c.promise ?? ""
+          }));
+        }catch(e){
+          console.error("Liste okunamadı:",e);
+          customers = [];
+        }
+      }
+      applyFilters();
+      render();
+    }
+    function clearLocal(){
+      localStorage.removeItem("borcListesi");
+      customers=[];
+      filtered=[];
+      currentSearch = "";
+      currentFilter = "all";
+      searchInput.value = "";
+      bulkMode = false;
+      bulkNextBtn.disabled = true;
+      updateFilterUI();
+      render();
+      alert("Kayıtlı liste temizlendi.");
+    }
+
+    // 💾 Gönderim Log Kaydet / Yükle
+    function saveLogToLocal(){
+      localStorage.setItem("borcGonderimLog", JSON.stringify(sendLog));
+    }
+    function loadLogFromLocal(){
+      const saved = localStorage.getItem("borcGonderimLog");
+      if(saved){
+        try{
+          sendLog = JSON.parse(saved) || [];
+        }catch(e){
+          console.error("Log okunamadı:", e);
+          sendLog = [];
+        }
+      } else {
+        sendLog = [];
+      }
+      renderLog();
+    }
+
+    // 🖋️ Gönderilecek ismi düzenle
+    function editName(index){
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      const c    = list[index];
+      const yeniIsim = prompt("Mesajda görünecek yeni müşteri adını girin:", c.name);
+      if(yeniIsim && yeniIsim.trim()!==""){
+        c.name = yeniIsim.trim();
+        if(useFiltered){
+          const orjIndex = customers.findIndex(x =>
+            x.phone === c.phone && x.due === c.due && x.amount === c.amount && x.note === c.note
+          );
+          if(orjIndex >= 0){
+            customers[orjIndex].name = c.name;
+          }
+        }
+        saveListToLocal();
+        applyFilters();
+        render();
+      }
+    }
+
+    // 🖋️ Ödeme sözü tarihi düzenle
+    function editPromise(index){
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      const c    = list[index];
+      const mevcut = c.promise ? formatDateForDisplay(c.promise) : "";
+      const giris = prompt("Müşterinin ödeme sözü verdiği tarihi girin (gg.aa.yyyy) veya boş bırakın:", mevcut);
+      if(giris === null) return;
+      const t = giris.trim();
+      if(t === ""){
+        c.promise = "";
+      } else {
+        const iso = normalizeDateValue(t);
+        if(!iso){
+          alert("Tarih formatı anlaşılamadı. Örnek: 15.11.2025");
+          return;
+        }
+        c.promise = iso;
+      }
+      if(useFiltered){
+        const orjIndex = customers.findIndex(x =>
+          x.phone === c.phone && x.due === c.due && x.amount === c.amount && x.note === c.note
+        );
+        if(orjIndex >= 0){
+          customers[orjIndex].promise = c.promise;
+        }
+      }
+      saveListToLocal();
+      applyFilters();
+      render();
+    }
+
+    // 🗑️ Ödeme yapan cariyi listeden çıkar
+    function removeCustomer(index){
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      const c = list[index];
+
+      if(!confirm(`"${c.name}" carisini listeden kaldırmak istediğinize emin misiniz?`)){
+        return;
+      }
+
+      if(useFiltered){
+        const mainIndex = customers.findIndex(x =>
+          x.phone === c.phone &&
+          x.due   === c.due &&
+          x.amount=== c.amount &&
+          x.note  === c.note &&
+          x.name  === c.name
+        );
+        if(mainIndex !== -1){
+          customers.splice(mainIndex,1);
+        }
+      } else {
+        customers.splice(index,1);
+      }
+
+      // Çoklu gönderim açık ise sıfırla (indexler karışmasın)
+      bulkMode = false;
+      bulkNextBtn.disabled = true;
+
+      saveListToLocal();
+      applyFilters();
+      render();
+    }
+
+    // ❗ Ödeme sözü geçmiş mi?
+    function isPromiseOverdue(promiseIso){
+      if(!promiseIso) return false;
+      const pDate = new Date(promiseIso + "T00:00:00");
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      return pDate < today;
+    }
+
+    // 🧮 Toplam borcu hesapla
+    function updateTotal(){
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      if(!list || list.length === 0){
+        totalAmountSpan.textContent = "0,00 ₺";
+        return;
+      }
+      const total = list.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+      totalAmountSpan.textContent = formatAmount(total) + " ₺";
+    }
+
+    // 🔍 Arama + gecikme filtresi
+    function applyFilters(){
+      let list = customers.slice();
+
+      if(currentFilter === "30+"){
+        list = list.filter(c => getDaysLate(c.due) >= 30);
+      } else if(currentFilter === "60+"){
+        list = list.filter(c => getDaysLate(c.due) >= 60);
+      }
+
+      const q = currentSearch.trim();
+      if(q){
+        const nq = normalizeSearchText(q);
+        list = list.filter(c =>{
+          const nameN = normalizeSearchText(c.name || "");
+          const noteN = normalizeSearchText(c.note || "");
+          const phoneDisp = formatPhoneForDisplay(c.phone);
+          return (
+            nameN.includes(nq) ||
+            noteN.includes(nq) ||
+            (phoneDisp && phoneDisp.includes(q))
+          );
+        });
+      }
+
+      filtered = list;
+    }
+
+    // 🖼️ Ana tabloyu çiz
+    function render(){
+      tbody.innerHTML="";
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+
+      if(list.length===0){
+        tbody.innerHTML='<tr><td colspan="7" class="empty">Sonuç yok.</td></tr>';
+        updateTotal();
+        return;
+      }
+
+      list.forEach((c,i)=>{
+        const tr=document.createElement("tr");
+
+        if(isPromiseOverdue(c.promise)){
+          tr.classList.add("overdue-promise");
+        }
+
+        tr.innerHTML=`
+          <td>${i+1}</td>
+          <td>
+            ${c.name}
+            <button class="btn small" onclick="editName(${i})">İsmi Düzenle</button>
+            <span class="note-text">
+              İç Not: ${c.note && c.note.trim() !== "" ? c.note : "-"}
+            </span>
+          </td>
+          <td>${formatPhoneForDisplay(c.phone)}</td>
+          <td><span class="tag">${formatAmount(c.amount)} ₺</span></td>
+          <td>${formatDateForDisplay(c.due)}</td>
+          <td>
+            ${c.promise ? formatDateForDisplay(c.promise) : "-"}
+            <button class="btn small gray" onclick="editPromise(${i})">Söz Gir</button>
+          </td>
+          <td>
+            <button class="btn" onclick="send(${i})">Mesaj Gönder</button>
+            <button class="btn small red" onclick="removeCustomer(${i})">Ödendi</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      updateTotal();
+    }
+
+    // 🧾 Gönderim geçmişi tablosu
+    function renderLog(){
+      logTbody.innerHTML = "";
+      if(sendLog.length === 0){
+        logTbody.innerHTML = '<tr><td colspan="8" class="empty">Henüz gönderim yapılmadı.</td></tr>';
+        return;
+      }
+
+      const list = sendLog.slice().reverse();
+
+      list.forEach((e,idx)=>{
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td>${e.timestamp}</td>
+          <td>${e.name}</td>
+          <td>${e.note || "-"}</td>
+          <td>${formatPhoneForDisplay(e.phone)}</td>
+          <td>${formatAmount(e.amount)} ₺</td>
+          <td>${formatDateForDisplay(e.due)}</td>
+          <td>${e.promise ? formatDateForDisplay(e.promise) : "-"}</td>
+        `;
+        logTbody.appendChild(tr);
+      });
+    }
+
+    // 🔨 Tek müşterinin mesajını hazırlayıp WhatsApp'ı aç + logla
+    function send(index){
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      const c = list[index];
+
+      if(!c.phone.startsWith("90") || c.phone.length !== 12){
+        alert("Geçersiz numara: " + c.phone);
+        return;
+      }
+      const daysLate = getDaysLate(c.due);
+      const payUntil = getFiveDaysFromToday();
+
+      let msg =
+        `Sayın ${c.name}, ` +
+        `${COMPANY_NAME}’a ${formatDateForDisplay(c.due)} son ödeme tarihinden bu yana ` +
+        `${formatAmount(c.amount)} TL gecikmiş borcunuz bulunmaktadır. ` +
+        `Bugün itibarıyla ${daysLate} gün gecikmiştir. ` +
+        `En geç ${payUntil} tarihine kadar ödeme yapmanız gerekmektedir.`;
+
+      if (daysLate >= 60) {
+        msg += " Bu tarihe kadar ödeme yapılmaması durumunda veresiye alışverişiniz tamamen durdurulacaktır.";
+        msg += `\n\nÖdemenizi aşağıdaki IBAN’a yapabilirsiniz:\n${IBAN}\n${IBAN_OWNER}`;
+      } else if (daysLate >= 30) {
+        msg += " Gecikmenin devam etmesi halinde veresiye alışverişleriniz durdurulacaktır.";
+        msg += `\n\nÖdeme için IBAN:\n${IBAN}\n${IBAN_OWNER}`;
+      }
+
+      const now = new Date();
+      const tsDate = String(now.getDate()).padStart(2,"0");
+      const tsMonth = String(now.getMonth()+1).padStart(2,"0");
+      const tsYear = now.getFullYear();
+      const tsHour = String(now.getHours()).padStart(2,"0");
+      const tsMin  = String(now.getMinutes()).padStart(2,"0");
+      const ts = `${tsDate}.${tsMonth}.${tsYear} ${tsHour}:${tsMin}`;
+
+      sendLog.push({
+        timestamp: ts,
+        name: c.name,
+        note: c.note,
+        phone: c.phone,
+        amount: c.amount,
+        due: c.due,
+        promise: c.promise || ""
+      });
+      saveLogToLocal();
+      renderLog();
+
+      const url = `https://wa.me/${c.phone}?text=${encodeURIComponent(msg)}`;
+      window.open(url,"_blank");
+    }
+    window.send           = send;
+    window.editName       = editName;
+    window.editPromise    = editPromise;
+    window.removeCustomer = removeCustomer;
+
+    // 🔘 Gecikme filtresi butonları
+    function updateFilterUI(){
+      filterButtons.forEach(btn=>{
+        if(btn.dataset.filter === currentFilter){
+          btn.classList.add("active");
+        } else {
+          btn.classList.remove("active");
+        }
+      });
+    }
+    filterButtons.forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        currentFilter = btn.dataset.filter;
+        updateFilterUI();
+        applyFilters();
+        render();
+      });
+    });
+
+    // 📂 Dosya yükleme
+    loadBtn.addEventListener("click",()=>{
+      const file=fileInput.files[0];
+      if(!file){alert("Dosya seçin");return;}
+      const reader=new FileReader();
+      const isExcel=file.name.endsWith(".xlsx")||file.name.endsWith(".xls");
+      reader.onload=e=>{
+        if(isExcel){
+          const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+          const sheet=wb.Sheets[wb.SheetNames[0]];
+          const rows=XLSX.utils.sheet_to_json(sheet,{defval:""});
+          parseData(rows);
+        }else{
+          const text=e.target.result;
+          const lines=text.split(/\r?\n/).filter(l=>l.trim()!=="");
+          const head=lines[0].split(/;|,/).map(x=>x.trim().toLowerCase());
+          const idxN=head.findIndex(h=>h.includes("ad"));
+          const idxT=head.findIndex(h=>h.includes("tel"));
+          const idxA=head.findIndex(h=>h.includes("bor")||h.includes("tutar"));
+          const idxD=head.findIndex(h=>h.includes("tarih")||h.includes("vade"));
+          const rows=lines.slice(1).map(l=>{
+            const p=l.split(/;|,/);
+            return{
+              "Ad Soyad":    p[idxN],
+              "Telefon":     p[idxT],
+              "Borç Tutarı": p[idxA],
+              "Son Tarih":   p[idxD]
+            };
+          });
+          parseData(rows);
+        }
+      };
+      if(isExcel)reader.readAsArrayBuffer(file);else reader.readAsText(file,"UTF-8");
+    });
+
+    // 🧠 Veriyi işle
+    function parseData(rows){
+      customers=[];
+      rows.forEach(r=>{
+        const rawName = (r["Ad Soyad"]||r["isim"]||r["Müşteri"]||"").toString().trim();
+        const phone   = normalizePhone(r["Telefon"]);
+        const amount  = parseAmount(r["Borç Tutarı"]||r["Tutar"]||r["Borc Tutarı"]);
+        const due     = normalizeDateValue(r["Son Tarih"]||r["Vade"]||r["Tarih"]);
+        if(!rawName || !phone || isNaN(amount) || !due) return;
+        customers.push({
+          name: rawName,
+          note: rawName,
+          phone,
+          amount,
+          due,
+          promise: ""
+        });
+      });
+      filtered=[];
+      currentSearch = "";
+      currentFilter = "all";
+      searchInput.value = "";
+      bulkMode = false;
+      bulkNextBtn.disabled = true;
+      updateFilterUI();
+      saveListToLocal();
+      applyFilters();
+      render();
+      alert("Liste yüklendi ve kaydedildi!");
+    }
+
+    // 🔍 Arama
+    searchInput.addEventListener("input",()=>{
+      currentSearch = searchInput.value;
+      applyFilters();
+      render();
+    });
+
+    // 📅 TARİH SIRALAMA
+    sortDateBtn.addEventListener("click",()=>{
+      customers.sort((a,b)=>{
+        const da=new Date(a.due), db=new Date(b.due);
+        return sortDateAsc ? da-db : db-da;
+      });
+      sortDateAsc=!sortDateAsc;
+      sortDateBtn.textContent = sortDateAsc ? "Son Tarih ⬍" : "Son Tarih ⬆";
+      saveListToLocal();
+      applyFilters();
+      render();
+    });
+
+    // 💰 BORÇ SIRALAMA
+    sortAmountBtn.addEventListener("click", () => {
+      customers.sort((a, b) => {
+        const aa = Number(a.amount) || 0;
+        const bb = Number(b.amount) || 0;
+        return sortAmountAsc ? aa - bb : bb - aa;
+      });
+      sortAmountAsc = !sortAmountAsc;
+      sortAmountBtn.textContent = sortAmountAsc ? "Borç (TL) ⬍" : "Borç (TL) ⬆";
+      saveListToLocal();
+      applyFilters();
+      render();
+    });
+
+    // 🧹 Liste sıfırlama
+    clearBtn.addEventListener("click",()=>{
+      if(confirm("Kayıtlı listeyi tamamen silmek istediğinize emin misiniz?")){
+        clearLocal();
+      }
+    });
+
+    // 🚀 Çoklu gönderim butonları
+    bulkStartBtn.addEventListener("click", () => {
+      const useFiltered = currentFilter !== "all" || currentSearch.trim() !== "";
+      const list = useFiltered ? filtered : customers;
+      if(!list || list.length === 0){
+        alert("Gönderim yapılacak müşteri bulunamadı.");
+        return;
+      }
+      bulkMode = true;
+      bulkUseFiltered = useFiltered;
+      bulkIndex = 0;
+      bulkTotal = list.length;
+      bulkNextBtn.disabled = false;
+      alert(`Çoklu gönderim başlatıldı. Toplam ${bulkTotal} müşteri var. 'Sonrakine Geç' butonuna bastıkça sıradaki müşterinin WhatsApp ekranı açılacak.`);
+    });
+
+    bulkNextBtn.addEventListener("click", () => {
+      if(!bulkMode){
+        alert("Önce 'Çoklu Gönderim' butonuna basın.");
+        return;
+      }
+      const list = bulkUseFiltered ? filtered : customers;
+      if(bulkIndex >= list.length){
+        alert("Gönderilecek müşteri kalmadı.");
+        bulkMode = false;
+        bulkNextBtn.disabled = true;
+        return;
+      }
+      send(bulkIndex);
+      bulkIndex++;
+      if(bulkIndex >= list.length){
+        alert("Çoklu gönderim tamamlandı.");
+        bulkMode = false;
+        bulkNextBtn.disabled = true;
+      }
+    });
+
+    // 🚀 Sayfa açılınca otomatik yükle
+    window.addEventListener("load", () => {
+      updateFilterUI();
+      loadListFromLocal();
+      loadLogFromLocal();
+      updateTotal();
+    });
+  </script>
+</body>
+</html>
